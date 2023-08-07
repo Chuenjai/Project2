@@ -1,0 +1,244 @@
+# Required packages
+library(MASS)   
+library(tsDyn) 
+library(lavaan) 
+library(restriktor) 
+
+# Install and use package from GitHub 
+library(devtools)
+install_github("rebeccakuiper/ICweights")
+library(ICweights)
+
+set.seed(123)
+nsim <- 1000  # number of simulations
+
+# make arrays for storing the preferred values from simulations
+weightsRIvarianceTest1 <- array(NA, dim=c(nsim, 3))
+colnames(weightsRIvarianceTest1) <- c("H0","H1","Hu")
+weightsRIvarianceTest2 <- array(NA, dim=c(nsim, 2))
+colnames(weightsRIvarianceTest2) <- c("H1","complement H1")
+weightsRIvarianceTest3 <- array(NA, dim=c(nsim, 3))
+colnames(weightsRIvarianceTest3) <- c("H1","H2","Hu")
+weightsRIvarianceTest4 <- array(NA, dim=c(nsim, 5))
+colnames(weightsRIvarianceTest4) <- c("H0","H1", "H2", "H3", "H4")
+weightsRIvarianceTest5 <- array(NA, dim=c(nsim, 5))
+colnames(weightsRIvarianceTest5) <- c("H0","H1", "H3a", "H4a", "Hu")
+weightsRIvarianceTest6 <- array(NA, dim=c(nsim, 4))
+colnames(weightsRIvarianceTest6) <- c("H1", "H2", "H3b", "H4b")
+
+PT_weights_var1 <- array(NA, dim=c(nsim, 3))
+colnames(PT_weights_var1) <-  c("H0","H1", "Hu")
+PT_weights_var2 <- array(NA, dim=c(nsim, 2))
+colnames(PT_weights_var2) <-  c("H1","complement H1")
+PT_weights_var3 <- array(NA, dim=c(nsim, 3))
+colnames(PT_weights_var3) <-  c("H1","H2","Hu")
+PT_weights_var4 <- array(NA, dim=c(nsim, 5))
+colnames(PT_weights_var4) <-  c("H0","H1", "H2", "H3", "H4")
+PT_weights_var5 <- array(NA, dim=c(nsim, 5))
+colnames(PT_weights_var5) <-  c("H0","H1", "H3a", "H4a", "Hu")
+PT_weights_var6 <- array(NA, dim=c(nsim, 4))
+colnames(PT_weights_var6) <-  c("H1", "H2", "H3b", "H4b")
+
+# specify value for generating data set
+p <- 25   # number of persons and thus number of rows in data
+q <- 2    # number of variables
+M <- 3    # number of measurement occasions
+n <- q*M  # number of columns in data
+N <- 100    # Number of iterations from VAR(1) model per person - and use only last M of those N iterations
+B2 <- matrix(c(0.22, -0.07, -0.07, 0.28),byrow = T, 2) # alpha, beta, gamma, delta from Masselink et al.(2018) 
+data <- array(NA, c(p, n))  # create array with nrow=p and ncol=n for keeping simulated data
+colnames(data) <- c("x1", "x2", "x3", "y1", "y2", "y3")
+
+
+# hypotheses with boundaries (please specify the boundaries for the variances of each random intercept)
+H0 <- "kappaV == 0 ; omegaV == 0"
+H1 <- "kappaV > 0.24 ; omegaV > 0.28" 
+H2 <- "kappaV < 0 ; omegaV < 0" 
+H3 <- "kappaV > 0.24 ; omegaV < 0"
+H3a <- "kappaV > 0.24 ; omegaV == 0"
+H3b <- "kappaV > 0.24 ; omegaV < 0.28"
+H4 <- "kappaV < 0 ; omegaV > 0.28"
+H4a <- "kappaV == 0 ; omegaV > 0.28"
+H4b <- "kappaV < 0.24 ; omegaV > 0.28" 
+
+nrposdef <- 0
+round  <- 1 
+WarningTeller <- 0
+countNaN <- 0
+countNotPosDef  <- 0
+tellerOK <- 0
+simteller <-  1
+
+while(simteller<=nsim){
+
+  #ignore warning
+  oldw <- getOption("warn")
+  options(warn = -1)
+  
+  print(paste0("Iteration", simteller))
+  
+  for(j in 1:p){
+    var1 <- VAR.sim(B=B2, n=N, include="none")
+    data[j,] <- var1[(N-M+1):N,]
+  }
+  
+  # Fitting CLPM
+  clpmModel <- 
+    '
+  kappa =~ 1*x1 + 1*x2 + 1*x3
+  omega =~ 1*y1 + 1*y2 + 1*y3
+  
+  x1 ~ mu1*1 #intercepts
+  x2 ~ mu2*1
+  x3 ~ mu3*1
+  y1 ~ pi1*1
+  y2 ~ pi2*1
+  y3 ~ pi3*1
+  
+  # RICLPM become CLPM because of this part
+  kappa ~~ 0*kappa #variance
+  omega ~~ 0*omega #variance
+  kappa ~~ 0*omega #covariance
+  
+  #latent vars for AR and cross-lagged effects
+  p1 =~ 1*x1 #each factor loading set to 1
+  p2 =~ 1*x2
+  p3 =~ 1*x3
+  q1 =~ 1*y1
+  q2 =~ 1*y2
+  q3 =~ 1*y3
+  
+  #constrain autoregression and cross-lagged effects to be the same across both lags.
+  p3 ~ alpha*p2 + beta*q2
+  p2 ~ alpha*p1 + beta*q1
+  
+  q3 ~ delta*q2 + gamma*p2
+  q2 ~ delta*q1 + gamma*p1
+  
+  p1 ~~ p1 #variance
+  p2 ~~ u*p2
+  p3 ~~ u*p3
+  q1 ~~ q1 #variance
+  q2 ~~ v*q2
+  q3 ~~ v*q3
+  
+  p1 ~~ q1 #p1 and q1 covariance
+  p2 ~~ uv*q2 #p2 and q2 covariance should also be constrained to be the same
+  p3 ~~ uv*q3 #p2 and q2 covariance'
+  
+  clpmConstrainedsim <- lavaan(clpmModel, data = data,
+                               missing = 'ML', 
+                               int.ov.free = F,
+                               int.lv.free = F,
+                               auto.fix.first = F,
+                               auto.fix.single = F,
+                               auto.cov.lv.x = F,
+                               auto.cov.y = F,
+                               auto.var = F)
+  summary(clpmConstrainedsim, standardized = T)
+  
+  # Fitting RI-CLPM
+  riclpmModel <-  
+    '
+  kappa =~ 1*x1 + 1*x2 + 1*x3
+  omega =~ 1*y1 + 1*y2 + 1*y3
+  
+  x1 ~ mu1*1 #intercepts
+  x2 ~ mu2*1
+  x3 ~ mu3*1
+  y1 ~ pi1*1
+  y2 ~ pi2*1
+  y3 ~ pi3*1
+  
+  # Random intercept parts
+  kappa ~~ kappa #variance
+  omega ~~ omega #variance
+  kappa ~~ omega #covariance
+  
+  #latent vars for AR and cross-lagged effects
+  p1 =~ 1*x1 #each factor loading set to 1
+  p2 =~ 1*x2
+  p3 =~ 1*x3
+  q1 =~ 1*y1
+  q2 =~ 1*y2
+  q3 =~ 1*y3
+  
+  #constrain autoregression and cross-lagged effects to be the same across both lags.
+  p3 ~ alpha*p2 + beta*q2
+  p2 ~ alpha*p1 + beta*q1
+  
+  q3 ~ delta*q2 + gamma*p2
+  q2 ~ delta*q1 + gamma*p1
+  
+  p1 ~~ p1 #variance
+  p2 ~~ u*p2
+  p3 ~~ u*p3
+  q1 ~~ q1 #variance
+  q2 ~~ v*q2
+  q3 ~~ v*q3
+  
+  p1 ~~ q1 #p1 and q1 covariance
+  p2 ~~ uv*q2 #p2 and q2 covariance should also be constrained to be the same
+  p3 ~~ uv*q3 #p2 and q2 covariance'
+  
+  riclpmConstrainedsim <- lavaan(riclpmModel, data = data,
+                                 missing = 'ML', 
+                                 int.ov.free = F,
+                                 int.lv.free = F,
+                                 auto.fix.first = F,
+                                 auto.fix.single = F,
+                                 auto.cov.lv.x = F,
+                                 auto.cov.y = F,
+                                 auto.var = F)
+  warning <- any(is.na(parameterEstimates(riclpmConstrainedsim)[c(7:15,22:38),]))
+  notposdef <- any(eigen(lavInspect(riclpmConstrainedsim, "cov.lv"))$values <= 1e-8)#*
+  
+  if(warning == TRUE) {
+    countNaN <- countNaN+1
+    WarningTeller <- WarningTeller + 1
+  } else if(notposdef == TRUE) {
+    countNotPosDef <- countNotPosDef+1
+    WarningTeller <- WarningTeller + 1
+    
+  } else { # if no warning, then do rest of code
+    print(paste0("Model does not contain NAs and cov mx of latents is pos def"))
+  
+    #GORICA
+    unstdRIvar <- coef(riclpmConstrainedsim)[c(7,8)]
+    names(unstdRIvar) <- c("kappaV", "omegaV")
+    unstdRIVcov <- vcov(riclpmConstrainedsim)[c(7,8), c(7,8)]
+    
+    goricaRIvar1 <- goric(unstdRIvar, VCOV = unstdRIVcov, hypotheses = list(H0, H1), type = "gorica")
+    goricaRIvar2 <- goric(unstdRIvar, VCOV = unstdRIVcov, hypotheses = list(H1), comparison = "complement", type = "gorica")
+    goricaRIvar3 <- goric(unstdRIvar, VCOV = unstdRIVcov, hypotheses = list(H1, H2), type = "gorica")
+    goricaRIvar4 <- goric(unstdRIvar, VCOV = unstdRIVcov, hypotheses = list(H0, H1, H2, H3, H4), comparison = "none", type = "gorica")
+    goricaRIvar5 <- goric(unstdRIvar, VCOV = unstdRIVcov, hypotheses = list(H0, H1, H3a, H4a), comparison = "unconstrained", type = "gorica")
+    goricaRIvar6 <- goric(unstdRIvar, VCOV = unstdRIVcov, hypotheses = list(H1, H2, H3b, H4b), comparison = "none", type = "gorica")
+    
+    # Store output
+      
+    #GORICA weights
+      weightsRIvarianceTest1[simteller,] <- goricaRIvar1$result[,7]
+      weightsRIvarianceTest2[simteller,] <- goricaRIvar2$result[,7]
+      weightsRIvarianceTest3[simteller,] <- goricaRIvar3$result[,7]
+      weightsRIvarianceTest4[simteller,] <- goricaRIvar4$result[,7]
+      weightsRIvarianceTest5[simteller,] <- goricaRIvar5$result[,7]
+      weightsRIvarianceTest6[simteller,] <- goricaRIvar6$result[,7]
+
+    #Penalty weights
+      PT_weights_var1[simteller,] <- goricaRIvar1$result[,6]
+      PT_weights_var2[simteller,] <- goricaRIvar2$result[,6]
+      PT_weights_var3[simteller,] <- goricaRIvar3$result[,6]
+      PT_weights_var4[simteller,] <- goricaRIvar4$result[,6]
+      PT_weights_var5[simteller,] <- goricaRIvar5$result[,6]
+      PT_weights_var6[simteller,] <- goricaRIvar6$result[,6]
+
+    simteller <-  simteller+1
+  }
+  
+  #ignore warnings
+  on.exit(options(warn = oldw))
+}
+  round <- round + 1
+
+
