@@ -78,6 +78,7 @@ countNotPosDef <-0
 tellerOK <- 0
 simteller<- 1
 
+# Generating code 
 while(simteller<=nsim){
 
   #ignore warning
